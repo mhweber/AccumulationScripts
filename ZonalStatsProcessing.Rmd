@@ -1,0 +1,390 @@
+SSWR 1.1B Spatial Prediction Pre-processing, zonal statistics, and point in polygon analysis
+---
+title: "Zonal Statistics Processing"
+author: "Marc Weber"
+date: "Wednesday, June 25, 2014"
+output: html_document
+---
+
+## Clean up raster processing units for elevation - left general approach but did manually
+```{r, cache=TRUE, eval=F}
+library(foreign)
+setwd('K:/Watershed Integrity Spatial Prediction/results')
+variables=list.files(".")
+elev = variables[grep("elev", variables)]
+
+library(stringr)
+variables = str_sub(variables, 0, -3)
+variables = variables[!duplicated(variables)]
+
+zonal1 <- read.dbf('zonalstats_elev03a.dbf')
+zonal2 <- read.dbf('zonalstats_elev03b.dbf')
+zonal <- rbind(zonal1, zonal2)
+# We need to only use the catchments with maximum value
+library(dplyr)
+zonal <- group_by(zonal, FEATUREID)
+zonal <- filter(zonal, rank(COUNT, ties.method="max")==2)
+write.dbf(zonal,'zonalstats_elev18.dbf')
+```
+
+## Clean up continuous zonal statistics results to explicitly include amount of missing data, rename fields, and include all NHDPlus catchments that were all no-data and not returned in zonal statistics as table results
+```{r, cache=TRUE, eval=F}
+library(foreign)
+hydro.rgns <- c("01","02","03S","03N","03W","04","05","06","07","08","09","10L","10U","11","12","13","14","15","16","17","18")
+rgns <- c("NE","MA","SA","SA","SA","GL","MS","MS","MS","MS","SR","MS","MS","MS","TX","RG","CO","CO","GB","PN","CA")
+for (k in 1:21){
+    zonal <- read.dbf(paste(c("H:/Watershed Integrity Spatial Prediction/results/zonalstats_imp2006",hydro.rgns[k],".dbf"),collapse=''))
+    head(zonal)
+    lookup <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusCatchment/Catchment.dbf"),collapse=''))
+    head(lookup)
+    results <- merge(lookup[,c(2,4)],zonal, by="FEATUREID", all.x=T)
+    results$CatPctFull <- ((results$AREA *  1.0e-6) / results$AreaSqKM) * 100
+    head(results)
+    results <- results[c(1:2,8,15,3,5:7,9:10)]
+    names(results) <- c('COMID','CatAreaSqKM','CatMean','CatPctFull','CatCount','CatMin','CatMax','CatRange','CatStd','CatSum')
+    results$CatPctFull[is.na(results$CatPctFull)] <- 0
+    write.csv(results, paste(c("L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/CatResults/Imp2006_Ws",hydro.rgns[k],".csv"),collapse=''), row.names=F)
+}
+```
+
+## Clean up continuous zonal statistics results in riparian buffer to explicitly include amount of missing data, rename fields, and include all NHDPlus catchments that were all no-data and not returned in zonal statistics as table results
+```{r, cache=TRUE, eval=F}
+library(foreign)
+hydro.rgns <- c("01","02","03S","03N","03W","04","05","06","07","08","09","10L","10U","11","12","13","14","15","16","17","18")
+rgns <- c("NE","MA","SA","SA","SA","GL","MS","MS","MS","MS","SR","MS","MS","MS","TX","RG","CO","CO","GB","PN","CA")
+for (k in 1:21){
+    zonal <- read.dbf(paste(c("H:/Watershed Integrity Spatial Prediction/results/zonalstats_popden2010",hydro.rgns[k],"rip100.dbf"),collapse=''))
+    head(zonal)
+    mask <- read.dbf(paste(c("H:/Watershed Integrity Spatial Prediction/results/zonalstats_rip100mask",hydro.rgns[k],".dbf"),collapse=''))
+    head(mask)
+    lookup <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusCatchment/Catchment.dbf"),collapse=''))
+    head(lookup)
+    results <- merge(lookup[,c(2,4)],mask[,c(1,3)], by="FEATUREID", all.x=T)
+    head(results)
+    results <- merge(results[,c(1,3)],zonal, by="FEATUREID", all.x=T)
+    head(results)
+    results[is.na(results)] <- 0
+    results$CatAreaSqKM <- results$AREA.x *  1.0e-6
+    results$CatPctFull <- ((results$AREA.x *  1.0e-6) / results$CatAreaSqKM) * 100
+    results <- results[c(1,11,8,12,3,5:7,9:10)]
+    names(results) <- c('COMID','CatAreaSqKM','CatMean','CatPctFull','CatCount','CatMin','CatMax','CatRange','CatStd','CatSum')
+    results$CatPctFull[is.na(results$CatPctFull)] <- 0
+    write.csv(results, paste(c("L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/CatResults/Popden_Rp100",hydro.rgns[k],".csv"),collapse=''), row.names=F)
+}
+```
+
+## Clean up tabulation (categorical raster) results to explicitly include amount of missing data,rename fields, and include all NHDPlus catchments that were all no-data and not returned in zonal statistics as table results
+```{r, cache=TRUE, eval=F}
+library(foreign)
+library(stringr)
+hydro.rgns <- c("01","02","03S","03N","03W","04","05","06","07","08","09","10L","10U","11","12","13","14","15","16","17","18")
+rgns <- c("NE","MA","SA","SA","SA","GL","MS","MS","MS","MS","SR","MS","MS","MS","TX","RG","CO","CO","GB","PN","CA")
+#read raster attribute table to make sure all raster categories are listed for each hydro region
+rat <- read.dbf('L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/LandscapeRasters/QAComplete/nlcd2006.tif.vat.dbf')
+r <- sapply(rat$VALUE, function(x) paste(c('VALUE_',x),collapse='')) 
+for (k in 1:21){
+  tab <- read.dbf(paste(c("H:/Watershed Integrity Spatial Prediction/results/zonalstats_nlcd2006",hydro.rgns[k],".dbf"),collapse=''))
+  head(tab)
+  missing <- r[is.na(match(r, names(tab)))]
+  tab[,paste(missing)] <- c(0)
+  tab <- tab[c("VALUE", r)]
+  lookup <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusCatchment/Catchment.dbf"),collapse=''))
+  head(lookup)
+  #create new total field
+  tab$AreaSqM <- rowSums(tab[,2:ncol(tab)])
+  results <- merge(lookup[,c(1:2,4)],tab, by.x="GRIDCODE", by.y="VALUE",all.x=T)
+  head(results)
+  results$CatPctFull <- ((results$AreaSqM *  1.0e-6) / results$AreaSqKM) * 100
+  results <- results[c(2:c(ncol(results)-2),c(ncol(results)))]
+  names(results) <- c('COMID','CatAreaSqKM',names(results)[3:c(ncol(results))])
+  results$CatPctFull[is.na(results$CatPctFull)] <- 0
+  write.csv(results, paste(c("L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/CatResults/Lith_Ws",hydro.rgns[k],".csv"),collapse=''), row.names=F)
+  }
+```
+
+## Clean up tabulation (categorical raster) results for riparian buffers  and slope masks to explicitly include amount of missing data, convert to percentages, rename fields, and include all NHDPlus catchments that were all no-data and not returned in zonal statistics as table results
+```{r, cache=TRUE, eval=F}
+library(foreign)
+slp = T
+hydro.rgns <- c("01","02","03S","03N","03W","04","05","06","07","08","09","10L","10U","11","12","13","14","15","16","17","18")
+rgns <- c("NE","MA","SA","SA","SA","GL","MS","MS","MS","MS","SR","MS","MS","MS","TX","RG","CO","CO","GB","PN","CA")
+rat <- read.dbf('L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/LandscapeRasters/QAComplete/nlcd2006.tif.vat.dbf')
+r <- sapply(rat$VALUE, function(x) paste(c('VALUE_',x),collapse='')) 
+for (k in 1:21){
+  tab <- read.dbf(paste(c("H:/Watershed Integrity Spatial Prediction/results/zonalstats_nlcd2006",hydro.rgns[k],"_highslope.dbf"),collapse=''))
+  head(tab)
+  missing <- r[is.na(match(r, names(tab)))]
+  tab[,paste(missing)] <- c(0)
+  tab <- tab[c("VALUE", r)]
+  lookup <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusCatchment/Catchment.dbf"),collapse=''))
+  head(lookup)
+  mask <- read.dbf(paste(c("H:/Watershed Integrity Spatial Prediction/results/zonalstats_highslope_mask",hydro.rgns[k],".dbf"),collapse=''))
+  head(mask)
+  #create new total field
+  tab$Total <- rowSums(tab[,2:ncol(tab)])
+#   #convert area values to percentages - not using now
+#   for (i in 2:c(ncol(tab)-1)){
+#     tab[,i] = 100.0 * (tab[,i]/tab[,c(ncol(tab))])   
+#     }
+  results <- merge(lookup[,c(1:2,4)],tab, by.x="GRIDCODE", by.y="VALUE",all.x=T)
+  head(results)
+  results <- merge(results,mask[,c(1,3)], by="FEATUREID",all.x=T)
+  results[is.na(results)] <- 0
+  if (slp!= T){ 
+    results$CatAreaSqKM <- results$AREA *  1.0e-6 # we want to keep the modified riparian only area for riparian
+    results$CatPctFull <- (results$AreaSqM / results$AREA) * 100
+    results <- results[c(1,c(ncol(results)-1),3:c(ncol(results)-4),c(ncol(results)))]
+    names(results) <- c('COMID',names(results)[2:c(ncol(results))])
+    }
+  if (slp== T){
+    results$CatAreaSqKM <- results$AreaSqKM # we want to keep the true catchment area for use with slopes
+    results$CatPctFull <- (results$Total / results$AREA) * 100
+    results <- results[c(1,c(ncol(results)-1),4:c(ncol(results)-4),c(ncol(results)))]
+    names(results) <- c('COMID',names(results)[2:c(ncol(results))])
+    }
+  results$CatPctFull[is.na(results$CatPctFull)] <- 0
+  write.csv(results, paste(c("L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/CatResults/nlcd2006_highslope_",hydro.rgns[k],".csv"),collapse=''), row.names=F)
+  }
+```
+## Calculate point in polygon (count) results for dam points dataset and return in same table format as our zonal statistics for gridded datasets
+```{r, cache=TRUE, eval=FALSE}
+library(rgdal)
+library(raster)
+library(plyr) 
+hydro.rgns <- c("01","02","03S","03N","03W","04","05","06","07","08","09","10L","10U","11","12","13","14","15","16","17","18")
+rgns <- c("NE","MA","SA","SA","SA","GL","MS","MS","MS","MS","SR","MS","MS","MS","TX","RG","CO","CO","GB","PN","CA")
+dams <- readOGR('L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/LandscapeRasters/QAComplete', layer = 'dams')
+for (k in 1:21){
+  head(dams@data)
+  proj4string(dams)
+  # grabbing a pre-staged clipped raster for hydro region 17 because it was glacial trying to crop in R
+  # have to use cropped region 17 raster as extent introduces NAs when trying to extract
+  if (k ==20) cat <- raster('c:/temp/cat17_Clip.tif')
+  if (k!= 20) cat <- raster(paste(c('E:/NHDPlusV21/NHDPlus',rgns[k],'/NHDPlus',hydro.rgns[k],'/NHDPlusCatchment/cat'),collapse=''))
+  projection(cat)
+  dams2 <- spTransform(dams, CRS(projection(cat)))
+  extent(dams2)
+  extent(cat)
+  dam.gridcode = extract(cat,dams2)
+  dams2$cat_gridcode <- dam.gridcode  
+  head(dams2@data)
+  dams2 <- dams2[!is.na(dams2$cat_gridcode),]
+  # run once using NormStor and another using NIDStor
+  zonal <- ddply(dams2@data, "cat_gridcode", summarise,  CatCount= length(cat_gridcode),
+                 CatSum = sum(NIDStorM3), CatMin = min(NIDStorM3), CatMax = max(NIDStorM3), 
+                 CatRange = CatMax - CatMin, CatStd = sd(NIDStorM3))
+  head(zonal)
+  library(foreign)
+  lookup <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusCatchment/Catchment.dbf"),collapse=''))
+  head(lookup)
+  results <- merge(lookup[,c(1:2,4)],zonal, by.x="GRIDCODE", by.y="cat_gridcode",all.x=T)
+  head(results)
+  results <- results[c(-1)]
+  names(results)[1] <- c("COMID")
+  names(results)[2] <- c("CatAreaSqKm")
+  # Catchment mean storage is storage volume divided by catnment area
+  results$CatMean <- results$CatSum / results$CatAreaSqKm
+  results$CatPctFull <- 100
+  # set all NAs to zeros
+  results[is.na(results)] <- 0
+  results <- results[c(1:2,9:10,3,5:8,4)]
+  write.csv(results, paste(c("L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/CatResults/Dams_NIDStor_Ws",hydro.rgns[k],".csv"),collapse=''), row.names=F)
+  }
+```
+
+## Calculate point in polygon (count) results return in same table format as our zonal statistics for gridded datasets
+```{r, cache=TRUE, eval=FALSE}
+library(rgdal)
+library(raster)
+library(plyr) 
+hydro.rgns <- c("01","02","03S","03N","03W","04","05","06","07","08","09","10L","10U","11","12","13","14","15","16","17","18")
+rgns <- c("NE","MA","SA","SA","SA","GL","MS","MS","MS","MS","SR","MS","MS","MS","TX","RG","CO","CO","GB","PN","CA")
+mines <- readOGR('L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/LandscapeRasters/NeedsQA', layer = 'mines')
+mines <- spTransform(mines, CRS('+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +ellps=GRS80 +towgs84=0,0,0'))
+proj4string(mines)
+writeOGR(mines,'L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/LandscapeRasters/QAComplete','mines',driver='ESRI Shapefile')
+for (k in 2:21){
+  mines <- readOGR('L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/LandscapeRasters/NeedsQA', layer = 'mines')
+  head(mines@data)
+  proj4string(mines)
+  #do next part if doing riparian mask
+  mask <- raster(paste(c('H:/Watershed Integrity Spatial Prediction/Spatial Data/Riparian100mBuffer/ripbuf',hydro.rgns[k],'.tif'),collapse=''))
+  projection(mask)
+  mines <- spTransform(mines, CRS(projection(mask)))
+  riparian = extract(mask,mines)
+  mines$riparian <- riparian
+  mines <- mines[!is.na(mines$riparian),]
+  cat <- raster(paste(c('E:/NHDPlusV21/NHDPlus',rgns[k],'/NHDPlus',hydro.rgns[k],'/NHDPlusCatchment/cat'),collapse=''))
+  projection(cat)
+  mines <- spTransform(mines, CRS(projection(cat)))
+  mine.gridcode = extract(cat,mines)
+  mines$cat_gridcode <- mine.gridcode  
+  head(mines@data)
+  mines <- mines[!is.na(mines$cat_gridcode),]
+  # run once using NormStor and another using NIDStor
+  zonal <- ddply(mines@data, "cat_gridcode", summarise,  CatCount= length(cat_gridcode))
+  head(zonal)
+  library(foreign)
+  lookup <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusCatchment/Catchment.dbf"),collapse=''))
+  head(lookup)
+  results <- merge(lookup[,c(1:2,4)],zonal, by.x="GRIDCODE", by.y="cat_gridcode",all.x=T)
+  head(results)
+  results <- results[c(-1)]
+  names(results)[1] <- c("COMID")
+  names(results)[2] <- c("CatAreaSqKm")
+  # Catchment mean storage is storage volume divided by catnment area
+  results$CatMean <- results$CatCount / results$CatAreaSqKm
+  # set all NAs to zeros
+  results[is.na(results)] <- 0
+   write.csv(results, paste(c("L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/CatResults/Mines_Rp100",hydro.rgns[k],".csv"),collapse=''), row.names=F)
+  }
+```
+
+## Calculate point in polygon (count) results in riparian buffers and return in same table format as our zonal statistics for gridded datasets.  
+```{r, cache=TRUE, eval=FALSE}
+library(rgdal)
+library(raster)
+library(plyr) 
+hydro.rgns <- c("01","02","03S","03N","03W","04","05","06","07","08","09","10L","10U","11","12","13","14","15","16","17","18")
+rgns <- c("NE","MA","SA","SA","SA","GL","MS","MS","MS","MS","SR","MS","MS","MS","TX","RG","CO","CO","GB","PN","CA")
+points <- readOGR('L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/LandscapeRasters/QAComplete', layer = 'NPDES_Major')
+proj4string(points)
+points <- spTransform(superfund, CRS('+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +ellps=GRS80 +towgs84=0,0,0'))
+proj4string(points)
+summary(points)
+for (k in 1:21){
+  head(points@data)
+  proj4string(points)
+  #do next part if doing riparian mask
+  mask <- raster(paste(c('H:/Watershed Integrity Spatial Prediction/Spatial Data/Riparian100mBuffer/ripbuf',hydro.rgns[k],'.tif'),collapse=''))
+  projection(mask)
+  points <- spTransform(points, CRS(projection(mask)))
+  riparian = extract(mask, points)
+  if (!all(is.na(riparian))){
+    points$riparian <- riparian
+    points <- points[!is.na(points$riparian),]
+    cat <- raster(paste(c('E:/NHDPlusV21/NHDPlus',rgns[k],'/NHDPlus',hydro.rgns[k],'/NHDPlusCatchment/cat'),collapse=''))
+    projection(cat)
+    points <- spTransform(points, CRS(projection(cat)))
+    points.gridcode = extract(cat,points)
+    points$cat_gridcode <- points.gridcode  
+    head(points@data)
+    points <- points[!is.na(points$cat_gridcode),]
+    # run once using NormStor and another using NIDStor
+    zonal <- ddply(points@data, "cat_gridcode", summarise,  CatCount= length(cat_gridcode))
+    head(zonal)
+    library(foreign)
+    lookup <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusCatchment/Catchment.dbf"),collapse=''))
+    head(lookup)
+    results <- merge(lookup[,c(1:2,4)],zonal, by.x="GRIDCODE", by.y="cat_gridcode",all.x=T)
+    head(results)
+    results <- results[c(-1)]
+    names(results)[1] <- c("COMID")
+    names(results)[2] <- c("CatAreaSqKm")
+    # Catchment mean storage is storage volume divided by catnment area
+    results$CatMean <- results$CatCount / results$CatAreaSqKm
+    # set all NAs to zeros
+    results[is.na(results)] <- 0
+    }
+  if (all(is.na(riparian))){
+    library(foreign)
+    lookup <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusCatchment/Catchment.dbf"),collapse=''))
+    head(lookup)
+    results <- lookup[,c(2,4)]
+    results$CatCount <- 0
+    head(results)
+    names(results)[1] <- c("COMID")
+    names(results)[2] <- c("CatAreaSqKm")
+    # Catchment mean storage is storage volume divided by catnment area
+    results$CatMean <- results$CatCount / results$CatAreaSqKm
+    # set all NAs to zeros
+    results[is.na(results)] <- 0
+    }
+   write.csv(results, paste(c("L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/CatResults/npdes_Rp100",hydro.rgns[k],".csv"),collapse=''), row.names=F)
+  }
+```
+
+## Calculate line lengths of canal, ditch, or pipeline in each catchment and return in same table format as our zonal statistics for count data - also running in python using identity ensures lines are clipped to catchment boundaries.
+```{r, engine='python', engine.path='C:/Python27/ArcGIS10.2/python.exe',eval=FALSE}
+import arcpy
+from collections import OrderedDict
+inputs = OrderedDict([('10U','MS'),('10L','MS'),('07','MS'),('11','MS'),('06','MS'),('05','MS'),('08','MS'),('01','NE'),('02','MA'),('03N','SA'),('03S','SA'),('03W','SA'),('04','GL'),('09','SR'),('12','TX'),('13','RG'),('14','CO'),('15','CO'),('16','GB'),('17','PN'),('18','CA')])
+for reg in inputs:
+  hydroregion = inputs[reg]
+  zone = reg
+  streams="E:/NHDPlusV21/NHDPlus%s/NHDPlus%s/NHDSnapshot/Hydrography/NHDFlowline.shp"%(hydroregion, zone)
+  arcpy.MakeFeatureLayer_management(streams, 'streams', "\"FTYPE\" IN ('CanalDitch','Pipeline')")
+  wtshds="L:/Priv/CORFiles/Geospatial_Library/Data/Project/wr61682_weber_SplitCatchment/Script1_FullSet_NewMethod/wshedPolys.shp"
+  out = 'c:/temp/hydromod%s_splitcat.shp'%(zone)
+  final = 'c:/temp/hydromods_splitcats.shp'
+  if not arcpy.Exists(out):
+    print 'working on ' + zone
+    if not arcpy.Exists(final):
+      arcpy.Identity_analysis('streams', wtshds, final)
+    if arcpy.Exists(final):
+      arcpy.Identity_analysis('streams', wtshds, out)
+      arcpy.Append_management(out, final, "NO_TEST", "", "")
+  arcpy.Delete_management("streams")
+  arcpy.Delete_management(out)
+```
+
+```{r, cache=TRUE, eval=FALSE}
+library(rgdal)
+library(rgeos)
+library(dplyr) 
+hydro.rgns <- c("01","02","03S","03N","03W","04","05","06","07","08","09","10L","10U","11","12","13","14","15","16","17","18")
+rgns <- c("NE","MA","SA","SA","SA","GL","MS","MS","MS","MS","SR","MS","MS","MS","TX","RG","CO","CO","GB","PN","CA")
+for (k in 1:21){  
+  hydro_mod <- readOGR('c:/temp',layer=paste(c('hydromod',hydro.rgns[k],'_id'),collapse=''))
+  head(hydro_mod@data)
+  # transform to projected CRS
+  hydro_mod <- spTransform(hydro_mod, CRS('+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +ellps=GRS80 +towgs84=0,0,0'))
+  hydro_mod$LENGTHKM <- SpatialLinesLengths(hydro_mod) * .001
+  zonal <- group_by(hydro_mod@data, FEATUREID)
+  zonal <- summarise(zonal, CatCount= sum(LENGTHKM))
+  lookup <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusCatchment/Catchment.dbf"),collapse=''))
+  head(lookup)
+  results <- merge(lookup[,c(2,4)],zonal, by="FEATUREID",all.x=T)
+  head(results)
+  results <- results[!results$FEATUREID==0,]
+  results$CatCount[is.na(results$CatCount)] <- 0
+  names(results)[1:2] <- c("COMID","CatAreaSqKm")
+  # Catchment mean is hydro modification length in km divided by catnment area in sq km
+  results$CatMean <- results$CatCount / results$CatAreaSqKm
+  write.csv(results, paste(c("L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/CatResults/HydroMod_Ws",hydro.rgns[k],".csv"),collapse=''), row.names=F)
+  }
+```
+
+## Directly create accumulation table for variables straight from NHDPlus (i.e. NHDTmeanWs and NHDPptWs)
+```{r, cache=TRUE, eval=FALSE}
+library(foreign)
+hydro.rgns <- c("01","02","03S","03N","03W","04","05","06","07","08","09","10L","10U","11","12","13","14","15","16","17","18")
+rgns <- c("NE","MA","SA","SA","SA","GL","MS","MS","MS","MS","SR","MS","MS","MS","TX","RG","CO","CO","GB","PN","CA")
+for (k in 1:21){ 
+  cat.temp <- read.csv(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/VPUAttributeExtension/CumTotTempMA.txt"),collapse=''))
+  cat.precip <- read.csv(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/VPUAttributeExtension/CumTotPrecipMA.txt"),collapse=''))
+  cat.area <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusAttributes/CumulativeArea.dbf"),collapse=''))
+  elevslp <- read.dbf(paste(c("E:/NHDPlusV21/NHDPlus",rgns[k],"/NHDPlus",hydro.rgns[k],"/NHDPlusAttributes/elevslope.dbf"),collapse=''))
+  names(elevslp) <- toupper(names(elevslp))
+  NHDPlusAcumAttr <- cat.area[,c(1:2)]
+  names(NHDPlusAcumAttr) <- c('COMID','TotDASqKM')
+  cat.temp <- cat.temp[,c(1:2,4)]
+  names(cat.temp) <- c('COMID','AccumMissingAreaTempSqM','NHDTmeanWs')
+  NHDPlusAcumAttr <- merge(NHDPlusAcumAttr, cat.temp, by='COMID', all.x=T)
+  NHDPlusAcumAttr$AccumMissingAreaTempSqM[NHDPlusAcumAttr$AccumMissingAreaTempSqM < 0] <- 0
+  cat.precip <- cat.precip[,c(1:2,4)]
+  names(cat.precip) <- c('COMID','AccumMissingAreaPrecipSqM','NHDPptWs')
+  NHDPlusAcumAttr <- merge(NHDPlusAcumAttr, cat.precip, by='COMID', all.x=T)
+  NHDPlusAcumAttr$AccumMissingAreaPrecipSqM[NHDPlusAcumAttr$AccumMissingAreaPrecipSqM < 0] <- 0
+  head(NHDPlusAcumAttr)
+  NHDPlusAcumAttr$NHDTmeanWs <-  NHDPlusAcumAttr$NHDTmeanWs * .01
+  NHDPlusAcumAttr$NHDPptWs <-  NHDPlusAcumAttr$NHDPptWs * .01
+  
+  elevslp$MAXELEVSMO <- elevslp$MAXELEVSMO*.01 #convert from cm to m
+  elevslp$MINELEVSMO <- elevslp$MINELEVSMO*.01 #convert from cm to m
+  elevslp$NHDElevMean <- (elevslp$MAXELEVSMO + elevslp$MINELEVSMO) / 2
+  head(elevslp)
+  NHDPlusAcumAttr$NHDElevMean <- elevslp$NHDElevMean[match(NHDPlusAcumAttr$COMID, elevslp$COMID)]
+  write.csv(NHDPlusAcumAttr, paste(c("L:/Priv/CORFiles/Geospatial_Library/Data/Project/SSWR1.1B/AccumulationResults/NHDPlusAcumAtt_Ws",hydro.rgns[k],".csv"),collapse=''), row.names=F)
+  }
+```
